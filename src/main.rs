@@ -2,10 +2,17 @@ use core::fmt;
 use std::{path::Path, fs::File, error::Error};
 use std::io::prelude::*;
 
+use plotters::coord::Shift;
+use plotters::coord::types::RangedCoordf32;
 use plotters::prelude::*;
 
+use crate::util::quantiles;
+
+mod util;
+mod algos;
+
 #[derive(Debug)]
-struct Datapoint {
+pub struct HousingDatapoint {
     crim: f64, // per capita crime rate by town
     zn: f64, // proportion of residential land zoned for lots over 25,000 sq.ft.
     indus: f64, // proportion of non-retail business acres per town
@@ -39,14 +46,13 @@ impl DataParseError {
     }
 }
 
-impl Datapoint {
-    pub fn from_line(line: &str) -> Result<Datapoint, Box<dyn Error>> {
+impl HousingDatapoint {
+    pub fn from_line(line: &str) -> Result<HousingDatapoint, Box<dyn Error>> {
         let split: Vec<String> = line.split_whitespace().map(|s| s.to_owned()).collect();
-        eprintln!("split = {:#?}", split);
         if split.len() != 14 {
             Err(DataParseError::new())?
         }
-        Ok(Datapoint {
+        Ok(HousingDatapoint {
             crim: split[0].parse()?,
             zn: split[1].parse()?,
             indus: split[2].parse()?,
@@ -65,42 +71,76 @@ impl Datapoint {
     }
 }
 
-fn read_data(path: &Path) -> Result<Vec<Datapoint>, Box<dyn Error>> {
+fn read_data(path: &Path) -> Result<Vec<HousingDatapoint>, Box<dyn Error>> {
     let mut file = File::open(path)?;
     let mut content = String::new();
     file.read_to_string(&mut content)?;
     let data: Result<Vec<_>, _> = content.split("\n")
-        .map(|line| Datapoint::from_line(&line))
+        .filter(|line| !line.is_empty())
+        .map(|line| HousingDatapoint::from_line(&line))
         .collect();
 
     data
+}
+
+fn plot(
+    area: &DrawingArea<BitMapBackend<'_>, Shift>,
+    data: Vec<(f64, f64)>,
+    label: &str,
+    style: ShapeStyle
+    ) -> Result<(), Box<dyn std::error::Error>> {
+    let q0 = quantiles(&data.iter().map(|dp| dp.0).collect::<Vec<_>>()).ok_or(DataParseError::new())?;
+    let q1 = quantiles(&data.iter().map(|dp| dp.1).collect::<Vec<_>>()).ok_or(DataParseError::new())?;
+
+    let mut chart = ChartBuilder::on(&area)
+        .caption(label, ("sans-serif", 15).into_font())
+        .margin(3)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(0f32..q0.pointninefive as f32, 0f32..q1.pointninefive as f32)?;
+
+    chart.configure_mesh().draw()?;
+
+    chart.draw_series(
+        data
+        .iter()
+        .filter(|dp| dp.0 > q0.pointzerofive && dp.0 < q0.pointninefive)
+        .filter(|dp| dp.1 > q1.pointzerofive && dp.1 < q1.pointninefive)
+        .map(|dp| Circle::new((dp.0 as f32, dp.1 as f32), 2, style))
+        )?;
+
+    Ok(())
+}
+
+fn scatter(data: &Vec<HousingDatapoint>) -> Result<(), Box<dyn std::error::Error>> {
+    let root = BitMapBackend::new("scatter.png", (1080, 720)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let areas = root.split_evenly((2, 3));
+
+    // (crim, medv)
+    plot(&areas[0], data.iter().map(|dp| (dp.crim, dp.medv)).collect::<Vec<_>>(), "Crime - Median Housing Value", GREEN.filled())?;
+    // (crim, nox)
+    plot(&areas[1], data.iter().map(|dp| (dp.nox, dp.medv)).collect::<Vec<_>>(), "Nitric Oxide Concentration - Median Housing Value", RED.filled())?;
+    // (crim, rm)
+    plot(&areas[2], data.iter().map(|dp| (dp.rm, dp.medv)).collect::<Vec<_>>(), "Number of Rooms - Median Housing Value", BLUE.filled())?;
+    // (crim, dis)
+    plot(&areas[3], data.iter().map(|dp| (dp.dis, dp.medv)).collect::<Vec<_>>(), "Distance to Employment Centers - Median Housing Value", YELLOW.filled())?;
+    // (crim, tax)
+    plot(&areas[4], data.iter().map(|dp| (dp.tax, dp.medv)).collect::<Vec<_>>(), "Property Tax Rate - Median Housing Value", BLACK.filled())?;
+    // (crim, age)
+    plot(&areas[5], data.iter().map(|dp| (dp.age, dp.medv)).collect::<Vec<_>>(), "Proportion of Units built prior to 1940 - Median Housing Value", MAGENTA.filled())?;
+
+    root.present()?;
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = read_data(Path::new("./data/housing.csv"))?;
     eprintln!("data = {:#?}", data);
 
-    let root = BitMapBackend::new("plot.png", (640, 480)).into_drawing_area();
-    root.fill(&WHITE)?;
-    let mut chart = ChartBuilder::on(&root)
-        .caption("y=x^2", ("sans-serif", 50).into_font())
-        .margin(5)
-        .x_label_area_size(30)
-        .y_label_area_size(30)
-        .build_cartesian_2d(-1f32..1f32, 0f32..1f32)?;
-
-    chart.configure_mesh().draw()?;
-    chart.draw_series(LineSeries::new(
-            (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x*x)),
-            &GREEN))?
-        .label("y = x^2")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
-    chart.configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
-
-    root.present()?;
+    scatter(&data)?;
 
     Ok(())
 }
