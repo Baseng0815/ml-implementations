@@ -1,96 +1,25 @@
-use core::fmt;
-use std::{path::Path, fs::File, error::Error};
-use std::io::prelude::*;
+use std::path::Path;
 
+use data::HousingDatapoint;
 use plotters::coord::Shift;
-use plotters::coord::types::RangedCoordf32;
 use plotters::prelude::*;
+use util::{DataParseError, distribution_properties};
 
-use crate::util::quantiles;
+use crate::algos::{Dataset, Datapoint, LinearRegressionModel};
+use crate::data::read_housing_data;
 
 mod util;
 mod algos;
+mod data;
 
-#[derive(Debug)]
-pub struct HousingDatapoint {
-    crim: f64, // per capita crime rate by town
-    zn: f64, // proportion of residential land zoned for lots over 25,000 sq.ft.
-    indus: f64, // proportion of non-retail business acres per town
-    chas: f64, // Charles River dummy variable (= 1 if tract bounds river; 0 otherwise)
-    nox: f64, // nitric oxides concentration (parts per 10 million)
-    rm: f64, // average number of rooms per dwelling
-    age: f64, // proportion of owner-occupied units built prior to 1940
-    dis: f64, // weighted distances to ﬁve Boston employment centers
-    rad: f64, // index of accessibility to radial highways
-    tax: f64, // full-value property-tax rate per $10,000
-    ptratio: f64, // pupil-teacher ratio by town 12. B: 1000(Bk−0.63)2 where Bk is the proportion of blacks by town 13. LSTAT: % lower status of the population
-    b: f64, // 1000(Bk - 0.63)^2 where Bk is the proportion of blacks by town
-    lstat: f64, // % lower status of the population
-    medv: f64, // Median value of owner-occupied homes in $1000s
-}
-
-#[derive(Debug)]
-struct DataParseError {  }
-
-impl fmt::Display for DataParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Couldn't parse data")
-    }
-}
-
-impl Error for DataParseError { }
-
-impl DataParseError {
-    pub fn new() -> Self {
-        DataParseError { }
-    }
-}
-
-impl HousingDatapoint {
-    pub fn from_line(line: &str) -> Result<HousingDatapoint, Box<dyn Error>> {
-        let split: Vec<String> = line.split_whitespace().map(|s| s.to_owned()).collect();
-        if split.len() != 14 {
-            Err(DataParseError::new())?
-        }
-        Ok(HousingDatapoint {
-            crim: split[0].parse()?,
-            zn: split[1].parse()?,
-            indus: split[2].parse()?,
-            chas: split[3].parse()?,
-            nox: split[4].parse()?,
-            rm: split[5].parse()?,
-            age: split[6].parse()?,
-            dis: split[7].parse()?,
-            rad: split[8].parse()?,
-            tax: split[9].parse()?,
-            ptratio: split[10].parse()?,
-            b: split[11].parse()?,
-            lstat: split[12].parse()?,
-            medv: split[13].parse()?
-        })
-    }
-}
-
-fn read_data(path: &Path) -> Result<Vec<HousingDatapoint>, Box<dyn Error>> {
-    let mut file = File::open(path)?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
-    let data: Result<Vec<_>, _> = content.split("\n")
-        .filter(|line| !line.is_empty())
-        .map(|line| HousingDatapoint::from_line(&line))
-        .collect();
-
-    data
-}
-
-fn plot(
+fn plot_housing_feature(
     area: &DrawingArea<BitMapBackend<'_>, Shift>,
     data: Vec<(f64, f64)>,
     label: &str,
     style: ShapeStyle
     ) -> Result<(), Box<dyn std::error::Error>> {
-    let q0 = quantiles(&data.iter().map(|dp| dp.0).collect::<Vec<_>>()).ok_or(DataParseError::new())?;
-    let q1 = quantiles(&data.iter().map(|dp| dp.1).collect::<Vec<_>>()).ok_or(DataParseError::new())?;
+    let q0 = distribution_properties(&data.iter().map(|dp| dp.0).collect::<Vec<_>>()).ok_or(DataParseError::new())?.quantiles;
+    let q1 = distribution_properties(&data.iter().map(|dp| dp.1).collect::<Vec<_>>()).ok_or(DataParseError::new())?.quantiles;
 
     let mut chart = ChartBuilder::on(&area)
         .caption(label, ("sans-serif", 15).into_font())
@@ -112,35 +41,139 @@ fn plot(
     Ok(())
 }
 
-fn scatter(data: &Vec<HousingDatapoint>) -> Result<(), Box<dyn std::error::Error>> {
-    let root = BitMapBackend::new("scatter.png", (1080, 720)).into_drawing_area();
+fn eval_housing_features(data: &Vec<HousingDatapoint>) -> Result<(), Box<dyn std::error::Error>> {
+    let root = BitMapBackend::new("housing_features.jpg", (1080, 720)).into_drawing_area();
     root.fill(&WHITE)?;
 
     let areas = root.split_evenly((2, 3));
 
     // (crim, medv)
-    plot(&areas[0], data.iter().map(|dp| (dp.crim, dp.medv)).collect::<Vec<_>>(), "Crime - Median Housing Value", GREEN.filled())?;
+    plot_housing_feature(&areas[0], data.iter().map(|dp| (dp.crim, dp.medv)).collect::<Vec<_>>(), "Crime - Median Housing Value", GREEN.filled())?;
     // (crim, nox)
-    plot(&areas[1], data.iter().map(|dp| (dp.nox, dp.medv)).collect::<Vec<_>>(), "Nitric Oxide Concentration - Median Housing Value", RED.filled())?;
+    plot_housing_feature(&areas[1], data.iter().map(|dp| (dp.nox, dp.medv)).collect::<Vec<_>>(), "Nitric Oxide Concentration - Median Housing Value", RED.filled())?;
     // (crim, rm)
-    plot(&areas[2], data.iter().map(|dp| (dp.rm, dp.medv)).collect::<Vec<_>>(), "Number of Rooms - Median Housing Value", BLUE.filled())?;
+    plot_housing_feature(&areas[2], data.iter().map(|dp| (dp.rm, dp.medv)).collect::<Vec<_>>(), "Number of Rooms - Median Housing Value", BLUE.filled())?;
     // (crim, dis)
-    plot(&areas[3], data.iter().map(|dp| (dp.dis, dp.medv)).collect::<Vec<_>>(), "Distance to Employment Centers - Median Housing Value", YELLOW.filled())?;
+    plot_housing_feature(&areas[3], data.iter().map(|dp| (dp.dis, dp.medv)).collect::<Vec<_>>(), "Distance to Employment Centers - Median Housing Value", YELLOW.filled())?;
     // (crim, tax)
-    plot(&areas[4], data.iter().map(|dp| (dp.tax, dp.medv)).collect::<Vec<_>>(), "Property Tax Rate - Median Housing Value", BLACK.filled())?;
+    plot_housing_feature(&areas[4], data.iter().map(|dp| (dp.tax, dp.medv)).collect::<Vec<_>>(), "Property Tax Rate - Median Housing Value", BLACK.filled())?;
     // (crim, age)
-    plot(&areas[5], data.iter().map(|dp| (dp.age, dp.medv)).collect::<Vec<_>>(), "Proportion of Units built prior to 1940 - Median Housing Value", MAGENTA.filled())?;
+    plot_housing_feature(&areas[5], data.iter().map(|dp| (dp.age, dp.medv)).collect::<Vec<_>>(), "Proportion of Units built prior to 1940 - Median Housing Value", MAGENTA.filled())?;
 
     root.present()?;
 
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let data = read_data(Path::new("./data/housing.csv"))?;
-    eprintln!("data = {:#?}", data);
+fn eval_regression_loss(housing_dataset: &Dataset) -> Result<(), Box<dyn std::error::Error>> {
+    // batch gradient descent
+    let rates = vec![0.2, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001];
+    let mut history: Vec<Vec<f64>> = Vec::new();
+    let mut models = Vec::with_capacity(rates.len());
+    for _ in 0..rates.len() {
+        history.push(Vec::new());
+        models.push(LinearRegressionModel::new(housing_dataset.features.ncols()));
+    }
 
-    scatter(&data)?;
+    for i in 0..1000 {
+        eprintln!("i = {:#?}", i);
+        for j in 0..rates.len() {
+            models[j].lr_bgd(&housing_dataset, rates[j], 1, 0.001);
+            history[j].push(models[j].loss_multiple(&housing_dataset));
+        }
+    }
+
+    let root = BitMapBackend::new("regression_loss_bgd.jpg", (1080, 720)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let max = history.iter().flatten().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption("Linear Regression with Batch Gradient Descent Loss Rate by Alpha", ("sans-serif", 20).into_font())
+        .margin(3)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(0f32..history.iter().map(|x| x.len()).max().unwrap() as f32, 0f32..(max as f32 * 1.05))?;
+
+    let colors = vec![GREEN.filled(), RED.filled(), BLUE.filled(), YELLOW.filled(), BLACK.filled(), MAGENTA.filled(), CYAN.filled()];
+    for i in 0..rates.len() {
+        let color = colors[i].clone();
+        chart.draw_series(LineSeries::new(
+            history[i]
+            .iter()
+            .enumerate()
+            .map(|dp| (dp.0 as f32, *dp.1 as f32)), color.stroke_width(1)))?
+            .label(format!("alpha={}", rates[i]))
+            .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 10, y + 5)], color.filled()));
+    }
+
+    chart.configure_mesh().x_desc("Training Epoch").y_desc("MSE").draw()?;
+    chart.configure_series_labels().border_style(BLACK).draw()?;
+    root.present()?;
+
+    // stochastic gradient descent with different batch sizes
+    let rates = [0.005, 0.1, 0.5];
+    history = Vec::new();
+    models = Vec::with_capacity(rates.len());
+    for _ in 0..rates.len() {
+        history.push(Vec::new());
+        models.push(LinearRegressionModel::new(housing_dataset.features.ncols()));
+    }
+    for i in 0..1000 {
+        eprintln!("i = {:#?}", i);
+        for j in 0..rates.len() {
+            models[j].lr_sgd(&housing_dataset, 0.005, rates[j], 1, 0.001);
+            history[j].push(models[j].loss_multiple(&housing_dataset));
+        }
+    }
+
+    let root = BitMapBackend::new("regression_loss_sgd.jpg", (1080, 720)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let max = history.iter().flatten().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption("Linear Regression with Stochastic Gradient Descent Loss Rate by Batch Size (alpha=0.005)", ("sans-serif", 20).into_font())
+        .margin(3)
+        .x_label_area_size(30)
+        .y_label_area_size(30)
+        .build_cartesian_2d(0f32..history.iter().map(|x| x.len()).max().unwrap() as f32, 0f32..(max as f32 * 1.05))?;
+
+    let colors = vec![GREEN.filled(), RED.filled(), BLUE.filled(), YELLOW.filled(), BLACK.filled(), MAGENTA.filled(), CYAN.filled()];
+    for i in 0..rates.len() {
+        let color = colors[i].clone();
+        chart.draw_series(LineSeries::new(
+            history[i]
+            .iter()
+            .enumerate()
+            .map(|dp| (dp.0 as f32, *dp.1 as f32)), color.stroke_width(1)))?
+            .label(format!("batch size={}", rates[i]))
+            .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 10, y + 5)], color.filled()));
+    }
+
+    chart.configure_mesh().x_desc("Training Epoch").y_desc("MSE").draw()?;
+    chart.configure_series_labels().border_style(BLACK).draw()?;
+    root.present()?;
+
+    // best solution through closed-formed normal equation
+    let mut best_model = LinearRegressionModel::new(housing_dataset.features.ncols());
+    best_model.lr_normaleqn(&housing_dataset);
+    eprintln!("best_model.loss_multiple(&housing_dataset) = {:#?}", best_model.loss_multiple(&housing_dataset));
+
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let housing_data = read_housing_data(Path::new("./data/housing.csv"))?;
+    eprintln!("housing_data = {:?}", housing_data);
+
+    let mut housing_dataset = Dataset::try_from(&housing_data.iter().map(|x| Datapoint::from(x)).collect::<Vec<_>>()[..])?;
+    eprintln!("housing_dataset = {:#?}", housing_dataset);
+    housing_dataset.normalize(0.0, 1.0);
+    eprintln!("housing_dataset = {:#?}", housing_dataset);
+
+    eval_housing_features(&housing_data)?;
+    eval_regression_loss(&housing_dataset)?;
 
     Ok(())
 }

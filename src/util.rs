@@ -1,3 +1,6 @@
+use core::fmt;
+use std::error::Error;
+
 pub struct Quantiles {
     pub min: f64,
     pub pointzerofive: f64,
@@ -8,7 +11,14 @@ pub struct Quantiles {
     pub max: f64,
 }
 
-pub fn quantiles(data: &Vec<f64>) -> Option<Quantiles> {
+pub struct DistributionProperties {
+    pub quantiles: Quantiles,
+    mean: f64,
+    variance: f64,
+    standard_deviation: f64
+}
+
+pub fn distribution_properties(data: &Vec<f64>) -> Option<DistributionProperties> {
     if data.is_empty() {
         return None
     }
@@ -17,7 +27,7 @@ pub fn quantiles(data: &Vec<f64>) -> Option<Quantiles> {
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     sorted.dedup();
 
-    Some(Quantiles {
+    let quantiles = Quantiles {
         min: sorted[0],
         pointzerofive: sorted[(sorted.len() as f64 * 0.05) as usize],
         pointtwofive: sorted[(sorted.len() as f64 * 0.25) as usize],
@@ -25,5 +35,34 @@ pub fn quantiles(data: &Vec<f64>) -> Option<Quantiles> {
         pointsevenfive: sorted[(sorted.len() as f64 * 0.75) as usize],
         pointninefive: sorted[(sorted.len() as f64 * 0.95) as usize],
         max: sorted[sorted.len() - 1]
+    };
+
+    let mean = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    let variance = sorted.iter().copied().reduce(|acc, e| acc + (e - mean).powi(2)).unwrap();
+
+    Some(DistributionProperties {
+        quantiles,
+        mean,
+        variance,
+        standard_deviation: variance.sqrt()
     })
 }
+
+#[derive(Debug)]
+pub struct DataParseError {  }
+
+impl fmt::Display for DataParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Couldn't parse data")
+    }
+}
+
+impl Error for DataParseError { }
+
+impl DataParseError {
+    pub fn new() -> Self {
+        DataParseError { }
+    }
+}
+
+
