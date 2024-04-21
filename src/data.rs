@@ -22,6 +22,13 @@ pub struct HousingDatapoint {
     pub medv: f64, // Median value of owner-occupied homes in $1000s
 }
 
+#[derive(Debug, Clone)]
+pub struct MailDatapoint {
+    pub index: String,
+    pub word_count: Vec<usize>,
+    pub is_spam: bool
+}
+
 impl HousingDatapoint {
     pub fn from_line(line: &str) -> Result<HousingDatapoint, Box<dyn Error>> {
         let split: Vec<String> = line.split_whitespace().map(|s| s.to_owned()).collect();
@@ -43,6 +50,24 @@ impl HousingDatapoint {
             b: split[11].parse()?,
             lstat: split[12].parse()?,
             medv: split[13].parse()?
+        })
+    }
+}
+
+impl MailDatapoint {
+    pub fn from_line(line: &str) -> Result<MailDatapoint, Box<dyn Error>> {
+        let split: Vec<String> = line.split(",").map(|s| s.to_owned()).collect();
+        if split.len() != 3002 {
+            Err(DataParseError::new())?
+        }
+        let mut word_count: Vec<usize> = Vec::new();
+        for str in split.iter().skip(1).take(3000) {
+            word_count.push(str.parse()?);
+        }
+        Ok(MailDatapoint {
+            index: split[0].clone(),
+            word_count,
+            is_spam: split[3001] == "0"
         })
     }
 }

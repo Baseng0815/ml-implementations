@@ -1,6 +1,9 @@
+use std::fs::File;
+use std::io::Read;
+use std::f64::consts::E;
 use std::path::Path;
 
-use data::HousingDatapoint;
+use data::{HousingDatapoint, MailDatapoint};
 use plotters::coord::Shift;
 use plotters::prelude::*;
 use util::{DataParseError, distribution_properties};
@@ -163,17 +166,100 @@ fn eval_regression_loss(housing_dataset: &Dataset) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let housing_data = read_housing_data(Path::new("./data/housing.csv"))?;
-    eprintln!("housing_data = {:?}", housing_data);
+fn spam_filter() -> Result<(), Box<dyn std::error::Error>> {
+    let mut file = File::open("./data/emails.csv")?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    let dict = content.lines().take(1).collect::<Vec<_>>().get(0).ok_or(DataParseError::new())?.split(",").skip(1).take(3000).map(|s| s.to_owned()).collect::<Vec<_>>();
+    eprintln!("dict = {:#?}", dict);
+    let data: Result<Vec<_>, _> = content.lines().skip(1)
+        .filter(|line| !line.is_empty())
+        .map(|line| MailDatapoint::from_line(&line))
+        .collect();
+    let data = data?;
+    let spam_count = data.len();
+    let non_spam_count = data.len() - spam_count;
 
-    let mut housing_dataset = Dataset::try_from(&housing_data.iter().map(|x| Datapoint::from(x)).collect::<Vec<_>>()[..])?;
-    eprintln!("housing_dataset = {:#?}", housing_dataset);
-    housing_dataset.normalize(0.0, 1.0);
-    eprintln!("housing_dataset = {:#?}", housing_dataset);
+    // probability of spam
+    let p_spam = data.iter().filter(|&d| d.is_spam).count() as f64 / spam_count as f64;
 
-    eval_housing_features(&housing_data)?;
-    eval_regression_loss(&housing_dataset)?;
+    // probability of word k
+    let mut p_word_k = vec![0.0; dict.len()];
+    for data in data.iter() {
+        for (i, &wc) in data.word_count.iter().enumerate() {
+            if wc > 0 {
+                p_word_k[i] += 1.0;
+            }
+        }
+    }
+
+    for val in p_word_k.iter_mut() {
+        *val = (*val + 1.0) / (data.len() as f64 + 1.0);
+    }
+
+    // probability of word k in dict appearing in non-spam mail
+    let mut p_word_k_nospam: Vec<f64> = vec![0.0; dict.len()];
+    for data in data.iter().filter(|&d| !d.is_spam) {
+        for (i, &wc) in data.word_count.iter().enumerate() {
+            if wc > 0 {
+                p_word_k_nospam[i] += 1.0;
+            }
+        }
+    }
+
+    for val in p_word_k_nospam.iter_mut() {
+        *val = (*val + 1.0) / (non_spam_count as f64 + 1.0);
+    }
+
+    // probability of word k in dict appearing in spam mail
+    let mut p_word_k_spam: Vec<f64> = vec![0.0; dict.len()];
+    for data in data.iter().filter(|&d| d.is_spam) {
+        for (i, &wc) in data.word_count.iter().enumerate() {
+            if wc > 0 {
+                p_word_k_spam[i] += 1.0;
+            }
+        }
+    }
+
+    for val in p_word_k_spam.iter_mut() {
+        *val = (*val + 1.0) / (spam_count as f64 + 1.0);
+    }
+
+    // Pr(Spam|Word) = Pr(Word|Spam)*Pr(Spam) / Pr(Word)
+
+    let mut a: Vec<(&f64, &String)> = p_word_k_spam.iter().zip(dict.iter()).collect();
+    a.sort_by(|b, c| b.0.partial_cmp(c.0).unwrap());
+    // eprintln!("p_spam = {:#?}", p_spam);
+    eprintln!("a = {:#?}", a);
+
+    // classify
+    let message = "subject not our low up gas forward forwarded";
+    let mut bow = vec![0; dict.len()];
+    for (i, word) in dict.iter().enumerate() {
+        if message.contains(word) {
+            bow[i] = 1;
+        }
+    }
+
+    let eta: f64 = p_word_k_spam.iter().zip(bow.iter()).filter(|(_, &c)| c > 0).map(|(pi, _)| (1.0 - pi).ln() - pi.ln()).sum();
+    let p = 1.0 / (1.0 + E.powf(eta));
+    eprintln!("eta = {:#?}", eta);
+    eprintln!("p = {:#?}", p);
 
     Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // let housing_data = read_housing_data(Path::new("./data/housing.csv"))?;
+    // eprintln!("housing_data = {:?}", housing_data);
+
+    // let mut housing_dataset = Dataset::try_from(&housing_data.iter().map(|x| Datapoint::from(x)).collect::<Vec<_>>()[..])?;
+    // eprintln!("housing_dataset = {:#?}", housing_dataset);
+    // housing_dataset.normalize(0.0, 1.0);
+    // eprintln!("housing_dataset = {:#?}", housing_dataset);
+
+    // eval_housing_features(&housing_data)?;
+    // eval_regression_loss(&housing_dataset)?;
+
+    spam_filter()
 }
