@@ -1,5 +1,5 @@
 use core::fmt;
-use std::error::Error;
+use std::{error::Error, f64::consts::E};
 
 pub struct Quantiles {
     pub min: f64,
@@ -65,4 +65,11 @@ impl DataParseError {
     }
 }
 
+pub fn sigmoid(x: f64) -> f64 {
+    1.0 / (1.0 + E.powf(-x))
+}
 
+pub fn sigmoid_derivative(x: f64) -> f64 {
+    let y = sigmoid(x);
+    y * (1.0 - y)
+}
