@@ -25,10 +25,10 @@ impl Layer {
     }
 }
 
-#[derive(Debug)]
-struct FeedforwardLayer {
-    weighted_inputs: DVector<f64>,
-    activation: DVector<f64>,
+#[derive(Debug, Clone)]
+pub struct FeedforwardLayer {
+    pub weighted_inputs: DVector<f64>,
+    pub activation: DVector<f64>,
 }
 
 impl FeedforwardLayer {
@@ -40,7 +40,7 @@ impl FeedforwardLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct FeedforwardResult {
     pub layers: Vec<FeedforwardLayer>,
 }
