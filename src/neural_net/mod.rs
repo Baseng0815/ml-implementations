@@ -94,9 +94,8 @@ impl NeuralNetwork {
     }
 
     /// Calculate an output value for an input value
-    pub fn feedforward(&self, inputs: &[DVector<f64>]) -> Vec<FeedforwardResult> {
-        let mut result = Vec::new();
-        for input in inputs {
+    pub fn feedforward(&self, inputs: &[DVector<f64>], indices: &[usize]) -> Vec<FeedforwardResult> {
+        indices.iter().map(|index| &inputs[*index]).map(|input| {
             let mut layers = vec![FeedforwardLayer::new(
                 DVector::zeros(input.ncols()),
                 input.clone(),
@@ -107,9 +106,9 @@ impl NeuralNetwork {
                 let activation = weighted_inputs.map(sigmoid);
                 layers.push(FeedforwardLayer::new(weighted_inputs, activation));
             }
-            result.push(FeedforwardResult::new(layers));
-        }
-        result
+
+            FeedforwardResult::new(layers)
+        }).collect::<Vec<_>>()
     }
 
     /// Calculate the gradient of the cost function for an input value and adjust parameters
@@ -117,12 +116,11 @@ impl NeuralNetwork {
         &mut self,
         feedforward_multi: &[FeedforwardResult],
         output_multi: &[DVector<f64>],
+        indices: &[usize],
+        eta: f64,
     ) {
-        let eta = 0.5;
-
-        let errors_multi: Vec<_> = feedforward_multi
-            .iter()
-            .zip(output_multi.iter())
+        let errors_multi: Vec<_> = feedforward_multi.iter()
+            .zip(indices.iter().map(|index| &output_multi[*index]))
             .map(|(ff, output)| {
                 // calculate output error
                 let last = ff.layers.last().expect("There has to be an output");

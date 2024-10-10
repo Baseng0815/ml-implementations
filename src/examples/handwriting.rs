@@ -3,6 +3,7 @@ use std::{f64::consts::E, fs, io::Cursor};
 use egui::{emath::RectTransform, pos2, vec2, Color32, Rect, Rounding, Sense};
 use image::{open, GenericImageView, ImageFormat, ImageReader};
 use nalgebra::{DVector, SVector};
+use rand::Rng;
 use serde::Serialize;
 
 use crate::neural_net::{FeedforwardResult, NeuralNetwork};
@@ -37,15 +38,15 @@ impl MNISTDataset {
 fn load_mnist_data() -> MNISTDataset {
     let bytes = fs::read("./data/mnist").unwrap();
     let (mut images, labels): (Vec<Vec<f64>>, Vec<u32>) = serde_pickle::from_slice(&bytes, Default::default()).unwrap();
-    for image in images.iter_mut() {
-        for value in image.iter_mut() {
-            if *value >= 0.5 {
-                *value = 1.0;
-            } else {
-                *value = 0.0
-            }
-        }
-    }
+    // for image in images.iter_mut() {
+    //     for value in image.iter_mut() {
+    //         if *value >= 0.5 {
+    //             *value = 1.0;
+    //         } else {
+    //             *value = 0.0
+    //         }
+    //     }
+    // }
     MNISTDataset::new(images, labels, 0.9)
 }
 
@@ -64,7 +65,7 @@ fn load_net(path: &str) -> NeuralNetwork {
 }
 
 fn vec_max_with_index(v: DVector<f64>) -> (f64, usize) {
-    let mut max = 0.0;
+    let mut max = v[0];
     let mut maxi = 0;
     for (rowi, row) in v.row_iter().enumerate() {
         if row[0] >= max {
@@ -78,17 +79,34 @@ fn vec_max_with_index(v: DVector<f64>) -> (f64, usize) {
 
 fn train_and_save() -> Result<(), ()> {
     // 28x28 pixels => 784 inputs (greyscale), 1 hidden layer with 15 neurons, 10 outputs
-    // let mut net = NeuralNetwork::new(vec![784, 15, 10])?;
-    let mut net = load_net("./net_pretty.ron");
+    let mut net = NeuralNetwork::new(vec![784, 30, 10])?;
+    // let mut net = load_net("./net_pretty.ron");
     let data = load_mnist_data();
+    eprintln!("data.training_images.len() = {:#?}", data.training_images.len());
+    eprintln!("data.test_images.len() = {:#?}", data.test_images.len());
 
+    // hyperparameters
+    let eta = 3.0; // learning rate
+    let batch_size = 10;
+    let epochs = data.training_images.len() / batch_size;
+
+    let mut indices = (0..data.training_images.len()).collect::<Vec<_>>();
     for i in 0..5000 {
-        // train
-        let feedforward = net.feedforward(&data.training_images);
-        net.backpropagate(&feedforward, &data.training_labels);
+        // train (stochastic gradient descent)
+        for i in 0..batch_size {
+            let j = rand::thread_rng().gen_range(0..indices.len());
+            indices.swap(i, j);
+        }
+
+        for epoch in 0..epochs {
+            let batch_indices = &indices[(epoch * batch_size)..((epoch + 1) * batch_size)];
+            let feedforward = net.feedforward(&data.training_images, batch_indices);
+            net.backpropagate(&feedforward, &data.training_labels, batch_indices, eta);
+            // eprintln!("   Batch iteration {}/{}...", batch_iteration, batch_iterations);
+        }
 
         // evaluate
-        let feedforward = net.feedforward(&data.test_images);
+        let feedforward = net.feedforward(&data.test_images, &(0..data.test_images.len()).collect::<Vec<_>>());
         let mut mse = 0.0;
         let mut correctly_classified = 0;
         for (label, ff) in data.test_labels.iter().zip(feedforward.iter()) {
@@ -167,7 +185,7 @@ impl eframe::App for FrontendApp {
             let to_screen = RectTransform::from_to(Rect::from_min_size(pos2(0.0, 0.0), vec2(self.pixels_w as f32, self.pixels_h as f32)), response.rect);
 
             if response.drag_stopped() {
-                let ff = self.net.feedforward(&[self.pixels.clone()]);
+                let ff = self.net.feedforward(&[self.pixels.clone()], &[0]);
                 self.last_ff = ff.last().expect("A feedforward must have a result").clone();
 
                 self.mode = DragMode::Nothing;
@@ -212,7 +230,7 @@ impl eframe::App for FrontendApp {
 }
 
 pub fn run_sample() -> Result<(), ()> {
-    train_and_save();
+    train_and_save()?;
 
     // let native_options = eframe::NativeOptions::default();
     // eframe::run_native("Digit recognition", native_options, Box::new(|cc| Ok(Box::new(FrontendApp::new(cc, 28, 28))))).unwrap();
