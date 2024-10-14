@@ -59,6 +59,14 @@ impl FeedforwardResult {
     }
 }
 
+pub struct CostFunction {
+    /// final output cost calculation
+    pub cost: fn(a: DVector<f64>, y: DVector<f64>) -> f64,
+
+    /// error for each layer while backpropagating
+    pub delta: fn(z: DVector<f64>, a: DVector<f64>, y: DVector<f64>) -> DVector<f64>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct NeuralNetwork {
     layers: Vec<Layer>,
@@ -118,6 +126,8 @@ impl NeuralNetwork {
         output_multi: &[DVector<f64>],
         indices: &[usize],
         eta: f64,
+        lambda: f64,
+        cost_function: &CostFunction,
     ) {
         let errors_multi: Vec<_> = feedforward_multi.iter()
             .zip(indices.iter().map(|index| &output_multi[*index]))
@@ -125,8 +135,7 @@ impl NeuralNetwork {
                 // calculate output error
                 let last = ff.layers.last().expect("There has to be an output");
                 let (a_last, z_last) = (last.activation.clone(), last.weighted_inputs.clone());
-                let z_last_derivative = z_last.map(sigmoid_derivative);
-                let error_last = (a_last - output).component_mul(&z_last_derivative);
+                let error_last = (cost_function.delta)(z_last, a_last, output.clone());
 
                 // backpropagate the error through all layers
                 let mut errors = vec![error_last];
@@ -156,13 +165,6 @@ impl NeuralNetwork {
                     |acc, (ff, errors)| {
                         // calculate gradient and adjust weights and biases for each layer
                         let activation_pre = ff.layers[layeri].activation.clone();
-                        // eprintln!("activation_pre.nrows() = {:#?}", activation_pre.nrows());
-                        // eprintln!("errors[layeri].nrows() = {:#?}", errors[layeri].nrows());
-                        // eprintln!("errors[layeri].ncols() = {:#?}", errors[layeri].ncols());
-                        // eprintln!("acc.0.nrows() = {:#?}", acc.0.nrows());
-                        // eprintln!("acc.0.ncols() = {:#?}", acc.0.ncols());
-                        // eprintln!("acc.1.nrows() = {:#?}", acc.1.nrows());
-                        // eprintln!("acc.1.ncols() = {:#?}", acc.1.ncols());
                         (
                             acc.0 + errors[layeri].clone() * activation_pre.transpose(),
                             acc.1 + errors[layeri].clone(),
@@ -170,18 +172,8 @@ impl NeuralNetwork {
                     },
                 );
 
-            // eprintln!(
-            //     "sum_gradient_weights.nrows() = {:#?}",
-            //     sum_gradient_weights.nrows()
-            // );
-            // eprintln!(
-            //     "sum_gradient_bias.nrows() = {:#?}",
-            //     sum_gradient_bias.nrows()
-            // );
-            // eprintln!("layer.weights.nrows() = {:#?}", layer.weights.nrows());
-            // eprintln!("layer.weights.ncols() = {:#?}", layer.weights.ncols());
-            // eprintln!("layer.bias.nrows() = {:#?}", layer.bias.nrows());
-            layer.weights -= eta / (output_multi.len() as f64) * sum_gradient_weights;
+            // L2 regularization (weight decay)
+            layer.weights = ((1.0 - eta * lambda / output_multi.len() as f64) * layer.weights.clone()) - eta / (output_multi.len() as f64) * sum_gradient_weights;
             layer.bias -= eta / (output_multi.len() as f64) * sum_gradient_bias;
         }
     }

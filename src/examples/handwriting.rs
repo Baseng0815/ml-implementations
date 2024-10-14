@@ -6,7 +6,7 @@ use nalgebra::{DVector, SVector};
 use rand::Rng;
 use serde::Serialize;
 
-use crate::neural_net::{FeedforwardResult, NeuralNetwork};
+use crate::{neural_net::{CostFunction, FeedforwardResult, NeuralNetwork}, util::sigmoid_derivative};
 
 #[derive(Debug)]
 pub struct MNISTDataset {
@@ -77,6 +77,20 @@ fn vec_max_with_index(v: DVector<f64>) -> (f64, usize) {
     (max, maxi)
 }
 
+fn nan_to_num(x: f64) -> f64 {
+    if x.is_infinite() {
+        if x.is_sign_negative() {
+            f64::MIN
+        } else {
+            f64::MAX
+        }
+    } else if x.is_nan() {
+        0.0
+    } else {
+        x
+    }
+}
+
 fn train_and_save() -> Result<(), ()> {
     // 28x28 pixels => 784 inputs (greyscale), 1 hidden layer with 15 neurons, 10 outputs
     let mut net = NeuralNetwork::new(vec![784, 30, 10])?;
@@ -85,13 +99,25 @@ fn train_and_save() -> Result<(), ()> {
     eprintln!("data.training_images.len() = {:#?}", data.training_images.len());
     eprintln!("data.test_images.len() = {:#?}", data.test_images.len());
 
+    let quadratic_cost = CostFunction {
+        cost: |a, y| 0.5 * (a - y).magnitude_squared(),
+        delta: |z, a, y| (a - y).component_mul(&z.map(sigmoid_derivative)),
+    };
+
+    let cross_entropy = CostFunction {
+        cost: |a, y| -(1.0 / y.len() as f64) * a.iter().zip(y.iter()).map(|(a, y)| y * a.ln() + (1.0 - y) * (1.0 - a).ln()).sum::<f64>(),
+        delta: |z, a, y| a - y,
+    };
+
     // hyperparameters
-    let eta = 3.0; // learning rate
+    let eta = 0.5; // learning rate
     let batch_size = 10;
+    let lambda = 0.1; // regularization parameter
     let epochs = data.training_images.len() / batch_size;
+    let cost_function = cross_entropy;
 
     let mut indices = (0..data.training_images.len()).collect::<Vec<_>>();
-    for i in 0..5000 {
+    for i in 0..300 {
         // train (stochastic gradient descent)
         for i in 0..batch_size {
             let j = rand::thread_rng().gen_range(0..indices.len());
@@ -101,13 +127,13 @@ fn train_and_save() -> Result<(), ()> {
         for epoch in 0..epochs {
             let batch_indices = &indices[(epoch * batch_size)..((epoch + 1) * batch_size)];
             let feedforward = net.feedforward(&data.training_images, batch_indices);
-            net.backpropagate(&feedforward, &data.training_labels, batch_indices, eta);
+            net.backpropagate(&feedforward, &data.training_labels, batch_indices, eta, lambda, &cost_function);
             // eprintln!("   Batch iteration {}/{}...", batch_iteration, batch_iterations);
         }
 
         // evaluate
         let feedforward = net.feedforward(&data.test_images, &(0..data.test_images.len()).collect::<Vec<_>>());
-        let mut mse = 0.0;
+        let mut cost = 0.0;
         let mut correctly_classified = 0;
         for (label, ff) in data.test_labels.iter().zip(feedforward.iter()) {
             let (_, correct_label) = vec_max_with_index(label.clone());
@@ -118,10 +144,10 @@ fn train_and_save() -> Result<(), ()> {
                 correctly_classified += 1;
             }
 
-            mse += (label - result).magnitude_squared();
+            cost += (cost_function.cost)(result.clone(), label.clone());
         }
-        mse = mse / data.test_labels.len() as f64;
-        eprintln!("Iteration {}: MSE={}; correctly classified: {}/{}", i, mse, correctly_classified, data.test_labels.len());
+        cost = cost / data.test_labels.len() as f64;
+        eprintln!("Iteration {}: cost={}; correctly classified: {}/{}", i, cost, correctly_classified, data.test_labels.len());
     }
 
     let net_ron = ron::ser::to_string_pretty(&net, ron::ser::PrettyConfig::default()).unwrap();
